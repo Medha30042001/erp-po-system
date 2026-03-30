@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from db import get_connection
 from schemas import VendorCreate, ProductCreate, PurchaseOrderCreate
 from fastapi.middleware.cors import CORSMiddleware
+from uuid import uuid4
 
 app = FastAPI()
 app.add_middleware(
@@ -158,92 +159,94 @@ def create_purchase_order(order: PurchaseOrderCreate):
     conn = get_connection()
     cursor = conn.cursor()
 
-    subtotal = 0
+    try:
+        subtotal = 0
+        item_details = []
 
-    item_details = []
-
-    for item in order.items:
-        cursor.execute(
-            """
-            SELECT id, name, unit_price
-            FROM products
-            WHERE id = %s;
-            """,
-            (item.product_id,)
-        )
-
-        product = cursor.fetchone()
-
-        if not product:
-            cursor.close()
-            conn.close()
-            return {"error" : f"Product with id {item.product_id} not found"}
-        
-        unit_price = float(product[2])
-        line_total = unit_price * item.quantity
-        subtotal += line_total
-
-        # item_details array for later
-        item_details.append({
-            "product_id" : item.product_id,
-            "quantity" : item.quantity,
-            "unit_price" : unit_price,
-            "line_total" : line_total
-        })
-
-
-    tax = subtotal * 0.05
-    total_amount = subtotal + tax
-
-    reference_no = f"PO-{str(order.vendor_id)[:8]}-{len(order.items)}"
-
-    cursor.execute(
-        """
-        INSERT INTO purchase_orders (reference_no, vendor_id, total_amount, status)
-        VALUES (%s, %s, %s, %s)
-        RETURNING id, reference_no, vendor_id, total_amount, status, created_at;
-        """,
-        (reference_no, order.vendor_id, total_amount, "Pending")
-    )
-
-    new_order = cursor.fetchone()
-    purchase_order_id = new_order[0]
-
-    for item in item_details:
-        cursor.execute(
-            """
-            INSERT INTO purchase_order_items
-            (purchase_order_id, product_id, quantity, unit_price, line_total)
-            VALUES (%s, %s, %s, %s, %s);
-            """,
-            (
-                purchase_order_id,
-                item["product_id"],
-                item["quantity"],
-                item["unit_price"],
-                item["line_total"]
+        for item in order.items:
+            cursor.execute(
+                """
+                SELECT id, name, unit_price
+                FROM products
+                WHERE id = %s;
+                """,
+                (item.product_id,)
             )
+
+            product = cursor.fetchone()
+
+            if not product:
+                cursor.close()
+                conn.close()
+                return {"error": f"Product with id {item.product_id} not found"}
+
+            unit_price = float(product[2])
+            line_total = unit_price * item.quantity
+            subtotal += line_total
+
+            item_details.append({
+                "product_id": item.product_id,
+                "quantity": item.quantity,
+                "unit_price": unit_price,
+                "line_total": line_total
+            })
+
+        tax = subtotal * 0.05
+        total_amount = subtotal + tax
+
+        reference_no = f"PO-{uuid4().hex[:8].upper()}"
+
+        cursor.execute(
+            """
+            INSERT INTO purchase_orders (reference_no, vendor_id, total_amount, status)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, reference_no, vendor_id, total_amount, status, created_at;
+            """,
+            (reference_no, order.vendor_id, total_amount, "Pending")
         )
 
-    conn.commit()
+        new_order = cursor.fetchone()
+        purchase_order_id = new_order[0]
 
-    cursor.close()
-    conn.close()
+        for item in item_details:
+            cursor.execute(
+                """
+                INSERT INTO purchase_order_items
+                (purchase_order_id, product_id, quantity, unit_price, line_total)
+                VALUES (%s, %s, %s, %s, %s);
+                """,
+                (
+                    purchase_order_id,
+                    item["product_id"],
+                    item["quantity"],
+                    item["unit_price"],
+                    item["line_total"]
+                )
+            )
 
-    return {
-        "message" : "Purchase order created successfully",
-        "purchase_order" : {
-            "id" : str(new_order[0]),
-            "reference_no" : new_order[1],
-            "vendor_id" : str(new_order[2]),
-            "subtotal" : subtotal,
-            "tax" : tax,
-            "total_amount" : float(new_order[3]),
-            "status" : new_order[4]
-        },
-        "items" : item_details
-    }
+        conn.commit()
 
+        return {
+            "message": "Purchase order created successfully",
+            "purchase_order": {
+                "id": str(new_order[0]),
+                "reference_no": new_order[1],
+                "vendor_id": str(new_order[2]),
+                "subtotal": subtotal,
+                "tax": tax,
+                "total_amount": float(new_order[3]),
+                "status": new_order[4]
+            },
+            "items": item_details
+        }
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        cursor.close()
+        conn.close()
 #--------------------------------------------------------------------------
 
 @app.get('/purchase-orders')
