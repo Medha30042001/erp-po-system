@@ -4,6 +4,8 @@
 
 A simple web app to manage Vendors, Products, and Purchase Orders.
 
+## Video Walkthrough : https://drive.google.com/file/d/1SKHdDYrl_doQtEotV2MKK12lPlv9841J/view?usp=sharing
+
 ## Features
 - Create & view vendors
 - Create & view products
